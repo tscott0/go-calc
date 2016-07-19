@@ -9,16 +9,19 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/gorilla/mux"
+	"github.com/op/go-logging"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
 	"time"
 )
+
+var log = logging.MustGetLogger("example")
 
 const maxMessageSize int64 = 1048576
 
@@ -51,7 +54,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 	var body []byte = readMessage(r)
 
-	fmt.Printf("%+v\n", string(body))
+	log.Infof("%+v\n", string(body))
 
 	var newCalc CalcRequest
 
@@ -60,14 +63,12 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	var requiredButMissing []string
 
 	for _, element := range calcRequestRequired {
-		//fmt.Println(key, element)
+		log.Debug(element)
 		v := reflect.ValueOf(newCalc)
 		found := v.FieldByName(element)
 
 		// TODO: Store the expected type of the required field too
 		// it should fail to unmarshal but best to check anyway.
-		//fmt.Println(found.Type())
-		//fmt.Println(found)
 		if found.IsNil() {
 			requiredButMissing = append(requiredButMissing, element)
 		}
@@ -77,7 +78,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		errorText := "The following elements are required but were not provided: "
 		errorText += strings.Join(requiredButMissing, ", ")
 
-		fmt.Println(errorText)
+		log.Warning(errorText)
 		return
 	}
 
@@ -96,12 +97,12 @@ func readMessage(r *http.Request) []byte {
 	body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxMessageSize))
 
 	if err != nil {
-		fmt.Println("ReadAll error")
+		log.Error("ReadAll error")
 		panic(err)
 	}
 
 	if err := r.Body.Close(); err != nil {
-		fmt.Println("Body.Close() error")
+		log.Error("Body.Close() error")
 		panic(err)
 	}
 
@@ -142,7 +143,7 @@ func doCalculation(op1, op2 *float64) *SuccessResponse {
 // TODO: Not sure if this is required with gorilla mux
 func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(r.URL.Path)
+		log.Info(r.URL.Path)
 		m := validPath.FindStringSubmatch(r.URL.Path)
 		if m == nil {
 			http.NotFound(w, r)
@@ -158,7 +159,22 @@ func Router() *mux.Router {
 	return r
 }
 
+// Helper function to initialise the go-logging package.
+func initLogging() {
+	// Example format string. Everything except the message has a custom color
+	// which is dependent on the log level. Many fields have a custom output
+	// formatting too, eg. the time returns the hour down to the milli second.
+	var format = logging.MustStringFormatter(
+		`%{color}%{time:15:04:05.000} %{shortfunc} - %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+	)
+
+	stdout := logging.NewLogBackend(os.Stderr, "", 0)
+	stdoutFormatted := logging.NewBackendFormatter(stdout, format)
+	logging.SetBackend(stdoutFormatted)
+}
+
 func main() {
-	fmt.Println("Calc server up...")
+	initLogging()
+	log.Notice("Calc server up...")
 	http.ListenAndServe(":8080", Router())
 }
