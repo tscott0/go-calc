@@ -1,7 +1,8 @@
 package main
 
 // TODO
-// - Unit tests
+// - Add more unit tests - 100% coverage
+// - Benchmark tests?
 // - Error function
 // - Logging
 // - goroutines
@@ -21,7 +22,7 @@ import (
 
 const maxMessageSize int64 = 1048576
 
-// Use pointers here to distinguish nil values.
+// CalcRequest Use pointers here to distinguish nil values.
 // If it's required then it must be non-nil
 // TODO: Strictness in additional fields? Should we error if we
 // receive unexpected fields, rather than silently discared them?
@@ -90,6 +91,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 // Read the message from the http request.
 // Limit the size to maxMessageSize (1MB)
+// TODO: Tune this limit. 1MB is arbitrary
 func readMessage(r *http.Request) []byte {
 	body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxMessageSize))
 
@@ -150,9 +152,13 @@ func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	}
 }
 
-func main() {
+func Router() *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/calc", makeHandler(calcHandler))
+	return r
+}
 
-	http.ListenAndServe(":8080", r)
+func main() {
+	fmt.Println("Calc server up...")
+	http.ListenAndServe(":8080", Router())
 }
