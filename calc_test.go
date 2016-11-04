@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -12,25 +10,30 @@ import (
 
 // TODO: Refactor tests to remove boilerplate
 // Teardown server for each request? Probably not needed
-func TestSuccess(t *testing.T) {
-	var request = []byte(`{"operand1": 1.4, "operand2": 2.3}`)
+func TestBasic(t *testing.T) {
 
-	r, err := http.NewRequest("POST", "/calc", bytes.NewBuffer(request))
+	reqBytes := []byte(`{"operand1": 1.4, "operand2": 2.3}`)
+
+	req, err := http.NewRequest("POST", "/calc", bytes.NewBuffer(reqBytes))
 	if err != nil {
 		log.Fatal("Could not build test request")
 	}
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	Router().ServeHTTP(w, r)
 
-	var success SuccessResponse
+	req.Header.Set("Content-Type", "application/json")
 
-	if err := json.Unmarshal(w.Body.Bytes(), &success); err != nil {
-		t.Error("Failed to unmarshal successful response")
+	recorder := httptest.NewRecorder()
+	handler := http.HandlerFunc(makeHandler(calcHandler))
+
+	handler.ServeHTTP(recorder, req)
+
+	// Check for status 200
+	if status := recorder.Code; status != http.StatusOK {
+		t.Errorf("Unexpected status code: received %v expected %v",
+			status, http.StatusOK)
 	}
 
 	// TODO: Assertions
 
-	fmt.Println("Result: ", success.Result)
+	//fmt.Println("Result: ", uccess.Result)
 
 }

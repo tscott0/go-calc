@@ -6,13 +6,14 @@ package main
 // - Error function
 // - Logging
 // - goroutines
+// - Remove reflect package?
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
-	"github.com/op/go-logging"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"reflect"
@@ -21,9 +22,17 @@ import (
 	"time"
 )
 
-var log = logging.MustGetLogger("example")
+const (
+	maxMessageSize int64 = 1048576
+)
 
-const maxMessageSize int64 = 1048576
+var (
+	Debug   *log.Logger
+	Info    *log.Logger
+	Warning *log.Logger
+	Error   *log.Logger
+	LogFmt  int
+)
 
 // CalcRequest Use pointers here to distinguish nil values.
 // If it's required then it must be non-nil
@@ -38,7 +47,7 @@ type CalcRequest struct {
 var calcRequestRequired = []string{"Operand1", "Operand2"}
 
 type SuccessResponse struct {
-	Result float64   `json:"result"`
+	Result string    `json:"result"`
 	Time   time.Time `json:"time"`
 }
 
@@ -48,22 +57,17 @@ type ErrorResponse struct {
 	Time        time.Time `json:"time"`
 }
 
-var validPath = regexp.MustCompile("^/(calc|calc)$")
+var validPath = regexp.MustCompile("^/calc$")
 
 func calcHandler(w http.ResponseWriter, r *http.Request) {
-
 	var body []byte = readMessage(r)
-
-	log.Infof("%+v\n", string(body))
-
 	var newCalc CalcRequest
+	var requiredButMissing []string
 
 	unmarshalCalcRequest(w, &body, &newCalc)
 
-	var requiredButMissing []string
-
 	for _, element := range calcRequestRequired {
-		log.Debug(element)
+		Debug.Print(element)
 		v := reflect.ValueOf(newCalc)
 		found := v.FieldByName(element)
 
@@ -78,7 +82,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		errorText := "The following elements are required but were not provided: "
 		errorText += strings.Join(requiredButMissing, ", ")
 
-		log.Warning(errorText)
+		Warning.Print(errorText)
 		return
 	}
 
@@ -97,12 +101,12 @@ func readMessage(r *http.Request) []byte {
 	body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxMessageSize))
 
 	if err != nil {
-		log.Error("ReadAll error")
+		Error.Print("ReadAll error")
 		panic(err)
 	}
 
 	if err := r.Body.Close(); err != nil {
-		log.Error("Body.Close() error")
+		Error.Print("Body.Close() error")
 		panic(err)
 	}
 
@@ -110,40 +114,40 @@ func readMessage(r *http.Request) []byte {
 }
 
 // Unmarshal the calculation request
-// TODO: Pass w by reference?
 func unmarshalCalcRequest(w http.ResponseWriter, body *[]byte, newCalc *CalcRequest) {
 	if err := json.Unmarshal(*body, newCalc); err != nil {
-		// TODO: Move error JSON code to function.
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		//w.WriteHeader(422) // unprocessable entity
+
 		errorJson := &ErrorResponse{
 			Type:        "Unmarshal error",
 			Description: err.Error(),
 			Time:        time.Now(),
 		}
 
-		// TODO: Is MarshalIndent really needed? Maybe for logging only?
-		prettyJson, err := json.MarshalIndent(errorJson, "", "\t")
-		w.Write(prettyJson)
+		errResponse, err := json.Marshal(errorJson)
 		if err != nil {
-			// Only panic if unable to send an error response
-			// Eventually replace this with error logging
-			panic(err)
+			Error.Print("Failed to build error json")
+		}
+
+		_, err = w.Write(errResponse)
+		if err != nil {
+			Error.Print("Failed to send error json")
 		}
 	}
 }
 
 // Takes two floats and multiplies them,
 func doCalculation(op1, op2 *float64) *SuccessResponse {
-	return &SuccessResponse{Result: *op1 * *op2, Time: time.Now()}
+	result := fmt.Sprintf("%f", *op1**op2)
+	Info.Printf("%v * %v = %v\n", *op1, *op2, result)
+	return &SuccessResponse{Result: result, Time: time.Now()}
 }
 
 // Decorator for handler functions
 // Adds logging and validates paths
-// TODO: Not sure if this is required with gorilla mux
 func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info(r.URL.Path)
+		Debug.Print(r.URL.Path)
 		m := validPath.FindStringSubmatch(r.URL.Path)
 		if m == nil {
 			http.NotFound(w, r)
@@ -153,28 +157,18 @@ func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	}
 }
 
-func Router() *mux.Router {
-	r := mux.NewRouter()
-	r.HandleFunc("/calc", makeHandler(calcHandler))
-	return r
-}
-
-// Helper function to initialise the go-logging package.
-func initLogging() {
-	// Example format string. Everything except the message has a custom color
-	// which is dependent on the log level. Many fields have a custom output
-	// formatting too, eg. the time returns the hour down to the milli second.
-	var format = logging.MustStringFormatter(
-		`%{color}%{time:15:04:05.000} %{shortfunc} - %{level:.4s} %{id:03x}%{color:reset} %{message}`,
-	)
-
-	stdout := logging.NewLogBackend(os.Stderr, "", 0)
-	stdoutFormatted := logging.NewBackendFormatter(stdout, format)
-	logging.SetBackend(stdoutFormatted)
-}
-
 func main() {
-	initLogging()
-	log.Notice("Calc server up...")
-	http.ListenAndServe(":8080", Router())
+	// Log line format
+	//    2009/01/23 01:23:23.123123 d.go:23:
+	LogFmt = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
+
+	//Debug = log.New(os.Stdout, "DEBUG: ", LogFmt)
+	Debug = log.New(ioutil.Discard, "DEBUG: ", LogFmt)
+	Info = log.New(os.Stdout, "INFO: ", LogFmt)
+	Warning = log.New(os.Stdout, "WARNING: ", LogFmt)
+	Error = log.New(os.Stderr, "ERROR: ", LogFmt)
+
+	http.HandleFunc("/calc", makeHandler(calcHandler))
+	Info.Print("Calc server up...")
+	http.ListenAndServe(":8080", nil)
 }
