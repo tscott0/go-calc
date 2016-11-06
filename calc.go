@@ -4,12 +4,15 @@ package main
 // - Add more unit tests - 100% coverage
 // - Benchmark tests?
 // - Error function
-// - Logging
 // - goroutines
 // - Remove reflect package?
+// - Use struct tags (reflect.StructTag) to mark required fields
+// - Return errors in functions and handle them in callers
+// - Handle port conflicts
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -31,7 +34,7 @@ var (
 	Info    *log.Logger
 	Warning *log.Logger
 	Error   *log.Logger
-	LogFmt  int
+	logFmt  int
 )
 
 // CalcRequest Use pointers here to distinguish nil values.
@@ -46,7 +49,7 @@ type CalcRequest struct {
 // Variable names that are required in the CalcRequest
 var calcRequestRequired = []string{"Operand1", "Operand2"}
 
-type SuccessResponse struct {
+type CalcResponse struct {
 	Result string    `json:"result"`
 	Time   time.Time `json:"time"`
 }
@@ -60,7 +63,7 @@ type ErrorResponse struct {
 var validPath = regexp.MustCompile("^/calc$")
 
 func calcHandler(w http.ResponseWriter, r *http.Request) {
-	var body []byte = readMessage(r)
+	var body []byte = readBodyWithLimit(r.Body)
 	var newCalc CalcRequest
 	var requiredButMissing []string
 
@@ -87,30 +90,31 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	result := doCalculation(newCalc.Operand1, newCalc.Operand2)
 	if err := json.NewEncoder(w).Encode(result); err != nil {
+		Error.Print("Failed to encode results")
 		panic(err)
 	}
 }
 
-// Read the message from the http request.
+// Read the message body from the http request.
 // Limit the size to maxMessageSize (1MB)
+// Closes the body and returns the unpacked bytes on success.
 // TODO: Tune this limit. 1MB is arbitrary
-func readMessage(r *http.Request) []byte {
-	body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxMessageSize))
-
+func readBodyWithLimit(body io.ReadCloser) []byte {
+	unpacked, err := ioutil.ReadAll(io.LimitReader(body, maxMessageSize))
 	if err != nil {
-		Error.Print("ReadAll error")
+		Error.Print("Failed to read from the HTTP Request.Body")
 		panic(err)
 	}
 
-	if err := r.Body.Close(); err != nil {
-		Error.Print("Body.Close() error")
+	if err := body.Close(); err != nil {
+		Error.Print("Failed to call Close() on HTTP Request.Body")
 		panic(err)
 	}
 
-	return body
+	return unpacked
 }
 
 // Unmarshal the calculation request
@@ -137,14 +141,13 @@ func unmarshalCalcRequest(w http.ResponseWriter, body *[]byte, newCalc *CalcRequ
 }
 
 // Takes two floats and multiplies them,
-func doCalculation(op1, op2 *float64) *SuccessResponse {
+func doCalculation(op1, op2 *float64) *CalcResponse {
 	result := fmt.Sprintf("%f", *op1**op2)
 	Info.Printf("%v * %v = %v\n", *op1, *op2, result)
-	return &SuccessResponse{Result: result, Time: time.Now()}
+	return &CalcResponse{Result: result, Time: time.Now()}
 }
 
-// Decorator for handler functions
-// Adds logging and validates paths
+// Decorator for debug logging and URL validation
 func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		Debug.Print(r.URL.Path)
@@ -157,18 +160,31 @@ func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	}
 }
 
+func init() {
+
+	// Log line format 2009/01/23 01:23:23.123123 d.go:23:
+	logFmt = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
+
+	var debugMode = flag.Bool("debug", false, "Log debug messages to stdout")
+
+	flag.Parse()
+
+	Info = log.New(os.Stdout, "INFO: ", logFmt)
+	Warning = log.New(os.Stdout, "WARNING: ", logFmt)
+	Error = log.New(os.Stderr, "ERROR: ", logFmt)
+
+	if *debugMode {
+		Debug = log.New(os.Stdout, "DEBUG: ", logFmt)
+		Info.Print("INIT: Debugging enabled")
+	} else {
+		Debug = log.New(ioutil.Discard, "DEBUG: ", logFmt)
+		Info.Print("INIT: Debugging disabled")
+	}
+
+}
+
 func main() {
-	// Log line format
-	//    2009/01/23 01:23:23.123123 d.go:23:
-	LogFmt = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
-
-	//Debug = log.New(os.Stdout, "DEBUG: ", LogFmt)
-	Debug = log.New(ioutil.Discard, "DEBUG: ", LogFmt)
-	Info = log.New(os.Stdout, "INFO: ", LogFmt)
-	Warning = log.New(os.Stdout, "WARNING: ", LogFmt)
-	Error = log.New(os.Stderr, "ERROR: ", LogFmt)
-
 	http.HandleFunc("/calc", makeHandler(calcHandler))
-	Info.Print("Calc server up...")
+	Info.Print("INIT: Calc server up...")
 	http.ListenAndServe(":8080", nil)
 }
