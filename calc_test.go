@@ -10,6 +10,22 @@ import (
 	"testing"
 )
 
+// Unmarshal the errpr response
+func unmarshalErrorResponse(body *[]byte, resp *ErrorResponse, t *testing.T) error {
+	if err := json.Unmarshal(*body, resp); err != nil {
+		return &UnmarshalError{"Failed to parse JSON"}
+	}
+
+	// error and time must be non-zero in the error response
+	if resp.Error == "" {
+		return &UnmarshalError{"error was empty"}
+	} else if resp.Time.IsZero() {
+		return &UnmarshalError{"time was zero"}
+	}
+
+	return nil
+}
+
 // Test for HTTP 200 status on success
 func TestStatusOK(t *testing.T) {
 	userJson := `{"operand1": 1.4, "operand2": 2.3}`
@@ -81,8 +97,8 @@ func TestBasicCalc(t *testing.T) {
 		t.FailNow()
 	}
 
-	fmt.Printf("Result: %v\n", response.Result)
-	fmt.Printf("Result: %v\n", response.Time)
+	Info.Printf("Response result: %v\n", response.Result)
+	Info.Printf("Response time: %v\n", response.Time)
 }
 
 // Unmarshal error from malformed JSON
@@ -101,26 +117,56 @@ func TestUnmarshalError(t *testing.T) {
 
 	handler.ServeHTTP(recorder, req)
 
-	var response CalcResponse
 	responseBody := readBodyWithLimit(recorder.Result().Body)
+	var errorResp ErrorResponse
 
-	// TODO: Create an unmarshalCalcResponse func that will error here, then handle it or fail
-	if err := json.Unmarshal(responseBody, &response); err != nil {
-		fmt.Printf("Failed to unmarshal response: %v\n", response.Result)
-		t.Error(err)
-		t.FailNow()
+	if err := unmarshalErrorResponse(&responseBody, &errorResp, t); err != nil {
+		if ue, ok := err.(*UnmarshalError); ok {
+			Info.Println(ue.Error())
+			t.Fail()
+		} else if mfe, ok := err.(*MissingFieldError); ok {
+			Info.Println(mfe.Error())
+			t.Fail()
+		}
 	}
 
-	fmt.Println(response)
-
-	fmt.Printf("Result: %v\n", response.Result)
-	fmt.Printf("Result: %v\n", response.Time)
-
-	//if err := json.Unmarshal(responseBody, &response); err != nil {
-	//if serr, ok := err.(*json.SyntaxError); ok {
-	//Info.Printf("Received expected json.SyntaxError: %v\n", serr)
-	//} else {
-	//t.Error("Unexpected json.Unmarshal error")
-	//}
-	//}
+	Info.Printf("Error response message: %v\n", errorResp.Error)
+	Info.Printf("Error response time: %v\n", errorResp.Time)
 }
+
+// One required field missing in the request
+func TestMissingFieldError(t *testing.T) {
+	userJson := `{"operand1": 1.4}`
+
+	req, err := http.NewRequest("POST", "/calc", strings.NewReader(userJson))
+	if err != nil {
+		log.Fatal("Could not build test request")
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	handler := http.HandlerFunc(makeHandler(calcHandler))
+
+	handler.ServeHTTP(recorder, req)
+
+	responseBody := readBodyWithLimit(recorder.Result().Body)
+	var errorResp ErrorResponse
+	if err := json.Unmarshal(responseBody, &errorResp); err != nil {
+		Info.Println("Failed to parse JSON")
+		t.Fail()
+	}
+
+	Info.Printf("Error response message: %v\n", errorResp.Error)
+	Info.Printf("Error response time: %v\n", errorResp.Time)
+
+	// Finally check the actual error message
+	if errorResp.Error != fmt.Sprintf("The following %v field(s) were missing: %v",
+		1, "Operand2") {
+		Info.Printf("Unexpected error response. Received \"%v\"", errorResp.Error)
+		t.Fail()
+	}
+
+}
+
+// TODO: Table-driven tests for errors, with subtests.
