@@ -36,6 +36,8 @@ var (
 	Warning *log.Logger
 	Error   *log.Logger
 	logFmt  int
+	silent  *bool
+	debug   *bool
 )
 
 // Errors
@@ -177,6 +179,8 @@ func sendErrorResponse(w http.ResponseWriter, errString string) error {
 
 // Takes two floats and multiplies them,
 func doCalculation(op1, op2 *float64) *CalcResponse {
+	// Convert result to a string here and do any rounding needed
+	// rather than allow marshalling to handle it.
 	result := fmt.Sprintf("%f", *op1**op2)
 	Info.Printf("%v * %v = %v\n", *op1, *op2, result)
 	return &CalcResponse{Result: result, Time: time.Now()}
@@ -195,17 +199,8 @@ func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	}
 }
 
-func init() {
-
-	// Log line format 2009/01/23 01:23:23.123123 d.go:23:
-	logFmt = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
-
-	var debugMode = flag.Bool("debug", false, "Log debug messages to stdout")
-	var silentMode = flag.Bool("silent", false, "Output no logging at all, not even to stderr")
-
-	flag.Parse()
-
-	if *silentMode {
+func initLogging(silent bool, debug bool) {
+	if silent {
 		Info = log.New(ioutil.Discard, "INFO: ", logFmt)
 		Warning = log.New(ioutil.Discard, "WARNING: ", logFmt)
 		Error = log.New(ioutil.Discard, "ERROR: ", logFmt)
@@ -215,13 +210,26 @@ func init() {
 		Error = log.New(os.Stderr, "ERROR: ", logFmt)
 	}
 
-	if *debugMode {
+	if debug {
 		Debug = log.New(os.Stdout, "DEBUG: ", logFmt)
 		Debug.Print("INIT: Debugging enabled")
 	} else {
 		Debug = log.New(ioutil.Discard, "DEBUG: ", logFmt)
 		Info.Print("INIT: Debugging disabled")
 	}
+}
+
+func init() {
+
+	// Log line format 2009/01/23 01:23:23.123123 d.go:23:
+	logFmt = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
+
+	silent = flag.Bool("silent", false, "Output no logging at all, not even to stderr")
+	debug = flag.Bool("debug", false, "Log debug messages to stdout")
+
+	flag.Parse()
+
+	initLogging(*silent, *debug)
 
 }
 
